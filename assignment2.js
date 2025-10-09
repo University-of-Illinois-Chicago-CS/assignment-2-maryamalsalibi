@@ -8,6 +8,48 @@ var vertexCount = 0;
 var uniformModelViewLoc = null;
 var uniformProjectionLoc = null;
 var heightmapData = null;
+var heightScale = 1;
+
+//i will make a helper function for creating the mesh
+	function createMesh(heightmapData){
+		//we already loop thru each pixel in processimage
+		var dataArray = heightmapData.data;
+		var width = heightmapData.width; //width array
+		var height = heightmapData.height; //height array
+		var x = 0, y = 0;
+		//var index = y * width + x;
+		var triangleVertices = [];
+		for (y = 0; y < height - 1; y++){ //for each pixel x,y: convert to 3d vertex
+			for (x = 0; x < width - 1; x++){ 
+
+				//for every two trianles there are 4 points(w respect to the top left)
+				//triangle 1: top left, bottom left, top right
+				let topleft = dataArray[y * width +x] * heightScale;
+				let bottomleft = dataArray[(y+1) * width + x]* heightScale;
+
+				//triangle 2: top right, bottom left, bottom right
+				let topright = dataArray[y * width +(x+1)]* heightScale;
+				let bottomright = dataArray[(y+1) * width + (x+1)]* heightScale;
+
+				//map it to 3d (z) these r coords of the grid 
+				let x0 = (x/width)-0.5; //center and scale
+				let x1 = ((x+1)/width) - 0.5;
+				let z0 = (y/height) - 0.5;
+				let z1 = ((y+1)/height) - 0.5;
+
+				// push the values into array for triangle 1
+				triangleVertices.push(x0, topleft, z0, x0, bottomleft, z1, x1, topright, z0);
+
+				//triangle 2
+				triangleVertices.push(x1, topright, z0, x0, bottomleft, z1, x1, bottomright, z1);
+
+			}
+
+		}
+
+		return new Float32Array(triangleVertices);
+			
+	}
 
 function processImage(img)
 {
@@ -49,7 +91,7 @@ function processImage(img)
 	return {
 		data: heightArray,
 		width: sw,
-		height: sw
+		height: sh
 	};
 }
 
@@ -68,20 +110,31 @@ window.loadImageFile = function(event)
 		var img = new Image();
 		img.onload = function() 
 		{
-			// heightmapData is globally defined
+			// heightmapData is globally defined6
 			heightmapData = processImage(img);
+
 			
 			/*
-				TODO: using the data in heightmapData, create a triangle mesh
+				TODO: using the data in heghtmapData, create a triangle mesh
 					heightmapData.data: array holding the actual data, note that 
 					this is a single dimensional array the stores 2D data in row-major order
 
 					heightmapData.width: width of map (number of columns)
 					heightmapData.height: height of the map (number of rows)
 			*/
+			let mesh = createMesh(heightmapData);
+			vertexCount = mesh.length / 3;
+
+			var posBuffer = createBuffer(gl, gl.ARRAY_BUFFER, mesh);
+			var posAttribLoc = gl.getAttribLocation(program, "position");
+			vao = createVAO(gl, posAttribLoc, posBuffer, null, null, null, null);
+			requestAnimationFrame(draw); 
+
+
 			console.log('loaded image: ' + heightmapData.width + ' x ' + heightmapData.height);
 
 		};
+
 		img.onerror = function() 
 		{
 			console.error("Invalid image file.");
@@ -94,6 +147,44 @@ window.loadImageFile = function(event)
 	reader.readAsDataURL(f);
 }
 
+//update height,zoom,xy rotation
+
+window.updateHeight = function(){
+	let val = parseInt(document.querySelector('#height').value);
+	heightScale = val / 50;
+	
+  	console.log("height scale:", heightScale);
+
+	if (heightmapData) {
+    let mesh = createMesh(heightmapData);
+    vertexCount = mesh.length / 3;
+
+    let posBuffer = createBuffer(gl, gl.ARRAY_BUFFER, mesh);
+    let posAttribLoc = gl.getAttribLocation(program, "position");
+    vao = createVAO(gl, posAttribLoc, posBuffer, null, null, null, null);
+
+    requestAnimationFrame(draw);
+  }
+}
+
+let zoom = 5.0;
+window.updateZoom = function(){
+	let val = parseFloat(document.querySelector('#scale').value);
+
+    zoom = 20.0 - (19.0 * val / 100); 
+
+    zoom = Math.max(1.0, Math.min(20.0, zoom));
+	eyeZ=zoom;
+
+    console.log("zoom:", zoom);
+}
+
+let rotY =0;
+window.updaterotY = function(){
+	let val= parseInt(document.querySelector('#rotY').value);
+	rotY = val * Math.PI / 180;
+	console.log("Y rotation", rotY);
+}
 
 function setupViewMatrix(eye, target)
 {
@@ -107,6 +198,9 @@ function setupViewMatrix(eye, target)
     return view;
 
 }
+let eyeX=0;
+let eyeY = 3;
+let eyeZ =5;
 function draw()
 {
 
@@ -116,23 +210,38 @@ function draw()
 	var farClip = 20.0;
 
 	// perspective projection
-	var projectionMatrix = perspectiveMatrix(
+	let projectionMatrix;
+	if (document.querySelector("#projection").value == "perspective") {
+	    projectionMatrix = perspectiveMatrix(
 		fovRadians,
 		aspectRatio,
 		nearClip,
-		farClip,
+		farClip
 	);
 
-	// eye and target
-	var eye = [0, 5, 5];
+	//TASK 4: orthographic projection
+	}else{
+		
+	 projectionMatrix = orthographicMatrix(
+			-3, 3,
+			-3, 3,
+			nearClip,
+			farClip
+		);
+	}
+
+
+	// eye and target 
+	var eye = [eyeX, eyeY, eyeZ];
 	var target = [0, 0, 0];
 
 	var modelMatrix = identityMatrix();
+	modelMatrix = multiplyMatrices(modelMatrix, rotateYMatrix(rotY));
+	//modelMatrix = multiplyMatrices(modelMatrix, rotateZMatrix(-0.5));
 
 	// TODO: set up transformations to the model
 
 	// setup viewing matrix
-	var eyeToTarget = subtract(target, eye);
 	var viewMatrix = setupViewMatrix(eye, target);
 
 	// model-view Matrix = view * model
@@ -146,7 +255,7 @@ function draw()
 	gl.disable(gl.CULL_FACE);
 
 	gl.clearColor(0.2, 0.2, 0.2, 1);
-	gl.clear(gl.COLOR_BUFFER_BIT);
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
 	gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 	gl.useProgram(program);
@@ -158,7 +267,9 @@ function draw()
 	gl.bindVertexArray(vao);
 	
 	var primitiveType = gl.TRIANGLES;
-	gl.drawArrays(primitiveType, 0, vertexCount);
+	//gl.drawArrays(primitiveType, 0, vertexCount);
+	//
+	gl.drawArrays(gl.TRIANGLES, 0, vertexCount);
 
 	requestAnimationFrame(draw);
 
@@ -257,12 +368,13 @@ function addMouseCallback(canvas)
 		if (e.deltaY < 0) 
 		{
 			console.log("Scrolled up");
-			// e.g., zoom in
+			zoom -=0.5;
 		} else {
 			console.log("Scrolled down");
-			// e.g., zoom out
+			zoom +=0.5;
 		}
 	});
+
 
 	document.addEventListener("mousemove", function (e) {
 		if (!isDragging) return;
@@ -274,6 +386,14 @@ function addMouseCallback(canvas)
 		console.log('mouse drag by: ' + deltaX + ', ' + deltaY);
 
 		// implement dragging logic
+		if (leftMouse){
+			eyeX-=deltaX * .01;
+		
+		}else{
+			eyeZ-=deltaY*.01
+		}
+		startX=currentX;
+		startY=currentY;
 	});
 
 	document.addEventListener("mouseup", function () {
